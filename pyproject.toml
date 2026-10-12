@@ -1,0 +1,14 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["tests/e2e"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/templates/*", "app/static/*", "app/config.py"]
