@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Edit Application</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<div class="container">
+
+    <header class="page-header">
+
+        <h1>Edit Application</h1>
+
+        <p>
+            Update the internship or job application details.
+        </p>
+
+    </header>
+
+    <section class="card">
+
+        <form
+            method="POST"
+            class="application-form"
+        >
+
+            <div class="form-grid">
+
+                <div class="form-group">
+
+                    <label for="company">
+                        Company Name
+                    </label>
+
+                    <input
+                        type="text"
+                        id="company"
+                        name="company"
+                        value="{{ application.company }}"
+                        required
+                    >
+
+                </div>
+
+                <div class="form-group">
+
+                    <label for="position">
+                        Position
+                    </label>
+
+                    <input
+                        type="text"
+                        id="position"
+                        name="position"
+                        value="{{ application.position }}"
+                        required
+                    >
+
+                </div>
+
+                <div class="form-group">
+
+                    <label for="application_date">
+                        Application Date
+                    </label>
+
+                    <input
+                        type="date"
+                        id="application_date"
+                        name="application_date"
+                        value="{{ application.application_date }}"
+                        required
+                    >
+
+                </div>
+
+                <div class="form-group">
+
+                    <label for="status">
+                        Status
+                    </label>
+
+                    <select
+                        id="status"
+                        name="status"
+                    >
+
+                        {% for status in statuses %}
+
+                        <option
+                            value="{{ status }}"
+                            {% if application.status == status %}
+                                selected
+                            {% endif %}
+                        >
+                            {{ status }}
+                        </option>
+
+                        {% endfor %}
+
+                    </select>
+
+                </div>
+
+                <div class="form-group">
+
+                    <label for="interview_date">
+                        Interview Date
+                    </label>
+
+                    <input
+                        type="date"
+                        id="interview_date"
+                        name="interview_date"
+                        value="{{ application.interview_date or '' }}"
+                    >
+
+                </div>
+
+            </div>
+
+            <div class="form-group full-width">
+
+                <label for="notes">
+                    Notes
+                </label>
+
+                <textarea
+                    id="notes"
+                    name="notes"
+                    rows="5"
+                >{{ application.notes or "" }}</textarea>
+
+            </div>
+
+            <div class="button-row">
+
+                <button
+                    type="submit"
+                    class="primary-button"
+                >
+                    Save Changes
+                </button>
+
+                <a
+                    href="{{ url_for('index') }}"
+                    class="secondary-button"
+                >
+                    Cancel
+                </a>
+
+            </div>
+
+        </form>
+
+    </section>
+
+</div>
+
+</body>
+</html>
