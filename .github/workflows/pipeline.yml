@@ -2,7 +2,7 @@
 # Khubi reviews and merges. Do not edit lint-and-unit or build-and-push without Khubi.
 #
 #   lint-and-unit -> build-and-push -> deploy-staging -> e2e-tests -> deploy-production
-#      (Khubi)           (Khubi)            (B)             (C)             (B)
+#      (Khubi)           (Khubi)            (Bhavana)         (Bhavana)             (B)
 #
 # Rules for every job: timeout-minutes 15, and deploy jobs name their needs:
 # explicitly (GitHub counts a skipped job as a pass for required checks).
@@ -93,29 +93,108 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ---------------------------------------------------------------- Person B
+  
+  # ---------------------------------------------------------------- Bhavana
   deploy-staging:
     name: deploy-staging
-    needs: build-and-push
+    needs: [build-and-push, integration-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: staging
+
     steps:
-      - name: TODO (Person B) SSH to Staging EC2, pull image, docker compose up -d
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          STAGING_KNOWN_HOSTS: ${{ secrets.STAGING_KNOWN_HOSTS }}
         run: |
-          echo "Image to deploy: ${{ needs.build-and-push.outputs.sha_tag }}"
-          echo "Secrets available: SSH_PRIVATE_KEY, STAGING_HOST, GHCR_USERNAME, GHCR_TOKEN"
-  # ---------------------------------------------------------------- Person C
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$STAGING_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          test -s ~/.ssh/deploy_key
+          test -s ~/.ssh/known_hosts
+
+      
+      - name: Deploy image to Staging
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          IMAGE: ${{ needs.build-and-push.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+
+          SSH=(ssh -o BatchMode=yes -o StrictHostKeyChecking=yes
+            -i "$HOME/.ssh/deploy_key" ubuntu@"$STAGING_HOST")
+
+          printf '%s' "$GHCR_TOKEN" | "${SSH[@]}" \
+            "sudo docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+
+          "${SSH[@]}" "IMAGE='$IMAGE' bash -se" <<'REMOTE'
+          set -euo pipefail
+          cd ~/devops-app
+
+          test -f .env
+          grep -q '^IMAGE=' .env
+
+          sed -i "s|^IMAGE=.*|IMAGE=$IMAGE|" .env
+
+          sudo docker compose pull web
+          sudo docker compose up -d --no-deps web
+          REMOTE
+
+
+      - name: Verify Staging health
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/deploy_key" ubuntu@"$STAGING_HOST" \
+            'for i in $(seq 1 30); do
+               if curl -fsS --max-time 3 http://localhost/health; then
+                 exit 0
+               fi
+               sleep 5
+             done
+             exit 1'
+
+  
+  # ---------------------------------------------------------------- Bhavana
   e2e-tests:
     name: e2e-tests
     needs: deploy-staging
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    env:
+      E2E_BASE_URL: ${{ secrets.STAGING_URL }}
+
     steps:
-      - name: TODO (Person C) run Playwright against the Staging URL (secret STAGING_URL)
-        run: echo "Playwright tests from tests/e2e go here"
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install --force-reinstall playwright==1.58.0
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: |
+          test -n "$E2E_BASE_URL"
+          pytest tests/e2e/ -v
+
 
   # ---------------------------------------------------------------- Person B
   deploy-production:
@@ -130,3 +209,42 @@ jobs:
         run: |
           echo "Image to deploy: ${{ needs.build-and-push.outputs.sha_tag }}"
           echo "Secrets available: SSH_PRIVATE_KEY, PROD_HOST, GHCR_USERNAME, GHCR_TOKEN"
+  
+  
+  # ---------------------------------------------------------------- Bhavana
+  integration-tests:
+    name: integration-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tracker
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: tracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tracker -d tracker_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://tracker:testpassword@localhost:5432/tracker_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run integration tests
+        run: python -m pytest tests/integration/ -v
+
