@@ -1,0 +1,12 @@
+# Production-only overrides, used on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml ...
+services:
+  web:
+    environment:
+      # Normally identical to the base file. During a rollback rehearsal,
+      # deploy.sh sets WEB_DB_PASSWORD to a wrong value so /health fails.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tracker}:${WEB_DB_PASSWORD:-${POSTGRES_PASSWORD}}@db:5432/${POSTGRES_DB:-tracker}
+      # For the request-latency log (only used once D's app reads LOG_FILE)
+      LOG_FILE: /app/logs/requests.log
+    volumes:
+      - ./logs:/app/logs

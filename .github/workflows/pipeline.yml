@@ -196,19 +196,77 @@ jobs:
           pytest tests/e2e/ -v
 
 
-  # ---------------------------------------------------------------- Person B
+  # ---------------------------------------------------------------- Shivi
   deploy-production:
     name: deploy-production
     needs: [build-and-push, e2e-tests]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: production
+    environment:
+      name: production
+      url: ${{ vars.PROD_URL }}
+
     steps:
-      - name: TODO (Person B) SSH to Production EC2, deploy same image, smoke check, rollback on fail
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
         run: |
-          echo "Image to deploy: ${{ needs.build-and-push.outputs.sha_tag }}"
-          echo "Secrets available: SSH_PRIVATE_KEY, PROD_HOST, GHCR_USERNAME, GHCR_TOKEN"
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/prod_key
+          chmod 600 ~/.ssh/prod_key
+          printf '%s\n' "$PROD_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          test -s ~/.ssh/prod_key
+          test -s ~/.ssh/known_hosts
+
+      - name: Copy compose files and scripts to Production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes -i ~/.ssh/prod_key \
+            docker-compose.yml \
+            deploy/production/docker-compose.prod.yml \
+            deploy/production/deploy.sh \
+            deploy/production/rollback.sh \
+            ubuntu@"$PROD_HOST":~/app/
+
+      - name: Log Production in to GHCR
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod_key ubuntu@"$PROD_HOST" \
+            "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+
+      - name: Deploy and smoke check
+        id: deploy
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          IMAGE: ${{ needs.build-and-push.outputs.sha_tag }}
+          SIMULATE: ${{ vars.SIMULATE_BAD_RELEASE || '0' }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod_key ubuntu@"$PROD_HOST" \
+            "bash ~/app/deploy.sh '$IMAGE' '$SIMULATE'"
+
+      - name: Automatic rollback
+        if: failure() && steps.deploy.outcome == 'failure'
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod_key ubuntu@"$PROD_HOST" \
+            "bash ~/app/rollback.sh"
+          # The job still ends red, so this counts as a failed change (brief Stage 6)
+
   
   
   # ---------------------------------------------------------------- Bhavana

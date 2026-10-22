@@ -1,0 +1,63 @@
+# Manual rollback (brief Stage 6): Actions > rollback > Run workflow > enter a commit SHA.
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA of the image to restore (full 40 characters)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ vars.PROD_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out image
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Not a full commit SHA"; exit 1; }
+          IMAGE="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]'):$SHA"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Configure SSH
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_KNOWN_HOSTS: ${{ secrets.PROD_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/prod_key && chmod 600 ~/.ssh/prod_key
+          printf '%s\n' "$PROD_KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+
+      - name: Log Production in to GHCR
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod_key ubuntu@"$PROD_HOST" \
+            "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+
+      - name: Redeploy chosen image (smoke-checked by deploy.sh)
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/prod_key ubuntu@"$PROD_HOST" \
+            "bash ~/app/deploy.sh '$IMAGE' 0"
